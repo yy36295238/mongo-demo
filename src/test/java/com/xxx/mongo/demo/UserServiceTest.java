@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.index.IndexInfo;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 /**
  * @author yangyu
@@ -76,6 +78,21 @@ public class UserServiceTest {
     }
 
     @Test
+    void queryById() {
+        User user = mongoTemplate.findById("60c81db3c281260bbb11909f", User.class);
+        System.err.println(user);
+    }
+
+    @Test
+    void queryByIdError() throws InterruptedException {
+        long start = System.currentTimeMillis();
+        Query query = Query.query(Criteria.where("id1").is("60c81db3c281260bbb11909f"));
+        User user = mongoTemplate.findOne(query, User.class, "user");
+        System.err.println(user);
+        System.err.println(System.currentTimeMillis() - start);
+    }
+
+    @Test
     void queryUser() {
         Query query = new Query();
         query.addCriteria(Criteria.where("order.status").is(1));
@@ -84,10 +101,46 @@ public class UserServiceTest {
     }
 
     @Test
+    void queryIndex() {
+        List<IndexInfo> indexInfo = mongoTemplate.indexOps(User.class).getIndexInfo();
+        indexInfo.forEach(System.out::println);
+    }
+
+    /**
+     * 深度分页优化，先返回ID，走索引覆盖
+     * 1、age是二级索引，先根据age查询id集合
+     * 2、在根据ID集合查询出想要的数据
+     */
+    @Test
+    void queryPage() {
+        long start = System.currentTimeMillis();
+        List<User> users = mongoTemplate.find(new Query().addCriteria(Criteria.where("age").is(23)).skip(1000000).limit(200), User.class);
+        System.err.println("cost:" + (System.currentTimeMillis() - start) + " " + users);
+
+        long start1 = System.currentTimeMillis();
+        Query newQuery = new Query().addCriteria(Criteria.where("age").is(23)).skip(1000000).limit(200);
+        newQuery.fields().include("_id");
+        List<User> userList = mongoTemplate.find(newQuery, User.class);
+        List<String> idList = userList.stream().map(User::getId).collect(Collectors.toList());
+        Query query = new Query().addCriteria(Criteria.where("_id").in(idList));
+        mongoTemplate.find(query, User.class);
+        System.err.println("cost:" + (System.currentTimeMillis() - start1) + " " + users);
+
+
+    }
+
+    @Test
+    void queryCountNOWhere() {
+        long start = System.currentTimeMillis();
+        long count = mongoTemplate.count(new Query(), User.class);
+        System.err.println(String.format("数量：%s, 耗时：%s", count, (System.currentTimeMillis() - start) + " ms"));
+    }
+
+    @Test
     void queryCount() {
         long start = System.currentTimeMillis();
-        Query query = new Query().addCriteria(Criteria.where("order.status").is("1"));
-        long count = mongoTemplate.count(query, User.class);
+        Query query = new Query().addCriteria(Criteria.where("age").is(23));
+        long count = mongoTemplate.count(new Query(), User.class);
         System.err.println(String.format("数量：%s, 耗时：%s", count, (System.currentTimeMillis() - start) + " ms"));
     }
 }
